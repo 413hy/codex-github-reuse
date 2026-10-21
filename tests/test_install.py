@@ -1,0 +1,167 @@
+"""Integration checks with isolated user/project directories; no network calls."""
+
+import importlib.util
+import os
+from pathlib import Path
+import tempfile
+import unittest
+from unittest.mock import patch
+
+
+SPEC = importlib.util.spec_from_file_location("kit_installer", Path(__file__).resolve().parents[1] / "install.py")
+installer = importlib.util.module_from_spec(SPEC)
+SPEC.loader.exec_module(installer)
+
+RULE_V1 = b"<!-- github-reuse-first:start -->\nUse $github-reuse-first before substantial development.\n<!-- github-reuse-first:end -->\n"
+RULE_V2 = RULE_V1.replace(b"before substantial development", b"before new projects and substantial features")
+
+
+class InstallerTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(prefix="reuse-installer-")
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        self.home = self.root / "用户 home"
+        self.home.mkdir()
+        self.package = self.root / "安装 package"
+        self.source = self.package / "skills" / "github-reuse-first"
+        self.source.mkdir(parents=True)
+        (self.source / "SKILL.md").write_bytes(b"---\nname: github-reuse-first\ndescription: Reuse projects.\n---\nVersion one.\n")
+        (self.package / "rules").mkdir()
+        self.template = self.package / "rules" / "AGENTS.github-reuse.md"
+        self.template.write_bytes(RULE_V1)
+        self.destination = self.home / ".agents" / "skills" / "github-reuse-first"
+        self.rules = self.home / ".codex" / "AGENTS.md"
+        self.addCleanup(patch.stopall)
+        patch.object(installer.Path, "home", return_value=self.home).start()
+        patch.dict(os.environ, {}, clear=True).start()
+
+    def call(self, **kwargs):
+        return installer.install(self.package, **kwargs)
+
+    def test_fresh_global_then_repeat_is_noop(self):
+        result = self.call()
+        self.assertEqual((self.destination / "SKILL.md").read_bytes(), (self.source / "SKILL.md").read_bytes())
+        self.assertEqual(self.rules.read_bytes(), RULE_V1)
+        self.assertEqual(result["backups"], [])
+        modified_at = self.rules.stat().st_mtime_ns
+        result = self.call()
+        self.assertFalse(result["skill_changed"])
+        self.assertFalse(result["rule_changed"])
+        self.assertEqual(result["backups"], [])
+        self.assertEqual(self.rules.stat().st_mtime_ns, modified_at)
+        self.assertFalse(list(self.home.rglob("*.bak-*")))
+
+    def test_preserves_bom_crlf_and_unrelated_rules_on_update(self):
+        self.rules.parent.mkdir()
+        original = b"\xef\xbb\xbf# My rules\r\nKeep exact bytes.\r\n"
+        self.rules.write_bytes(original)
+        first = self.call()
+        self.assertEqual(Path(first["backups"][0]).read_bytes(), original)
+        installed = self.rules.read_bytes()
+        self.assertTrue(installed.startswith(original))
+        self.assertNotIn(b"\n", installed.replace(b"\r\n", b""))
+        suffix = b"\r\n## Another section\r\nLeave me unchanged.\r\n"
+        self.rules.write_bytes(installed + suffix)
+        self.template.write_bytes(RULE_V2)
+        self.call()
+        current = self.rules.read_bytes()
+        self.assertTrue(current.startswith(original))
+        self.assertTrue(current.endswith(suffix))
+        self.assertEqual(current.count(installer.START), 1)
+        self.assertIn(b"substantial features", current)
+
+    def test_nonempty_override_is_active_and_codex_home_is_respected(self):
+        custom = self.root / "custom profile"
+        custom.mkdir()
+        os.environ["CODEX_HOME"] = str(custom)
+        override = custom / "AGENTS.override.md"
+        normal = custom / "AGENTS.md"
+        override.write_bytes(b"Override rules.\n")
+        normal.write_bytes(b"Normal rules.\n")
+        result = self.call()
+        self.assertEqual(Path(result["rule_path"]), override)
+        self.assertIn(installer.START, override.read_bytes())
+        self.assertEqual(normal.read_bytes(), b"Normal rules.\n")
+        self.assertTrue(self.destination.is_dir())
+        self.assertFalse((self.home / ".codex").exists())
+
+    def test_project_scope_ignores_empty_override_and_keeps_global_untouched(self):
+        project = self.root / "项目 with spaces"
+        project.mkdir()
+        override = project / "AGENTS.override.md"
+        override.write_bytes(b"\xef\xbb\xbf \r\n")
+        result = self.call(project=project)
+        self.assertEqual(Path(result["rule_path"]), project / "AGENTS.md")
+        self.assertEqual(override.read_bytes(), b"\xef\xbb\xbf \r\n")
+        self.assertTrue((project / ".agents/skills/github-reuse-first/SKILL.md").is_file())
+        self.assertFalse(self.rules.exists())
+        self.assertFalse(self.destination.exists())
+
+    def test_changed_skill_is_backed_up_and_updated_by_default(self):
+        self.call()
+        old = (self.destination / "SKILL.md").read_bytes()
+        (self.source / "SKILL.md").write_bytes(old + b"Version two.\n")
+        rule_before = self.rules.read_bytes()
+        result = self.call()
+        self.assertEqual(len(result["backups"]), 1)
+        self.assertEqual((Path(result["backups"][0]) / "SKILL.md").read_bytes(), old)
+        self.assertEqual(Path(result["backups"][0]).parent, self.home / ".agents" / "skill-backups")
+        self.assertEqual(len(list(self.destination.parent.rglob("SKILL.md"))), 1)
+        self.assertEqual((self.destination / "SKILL.md").read_bytes(), old + b"Version two.\n")
+        self.assertEqual(self.rules.read_bytes(), rule_before)
+
+    def test_dry_run_writes_nothing(self):
+        result = self.call(dry_run=True)
+        self.assertTrue(result["skill_changed"])
+        self.assertTrue(result["rule_changed"])
+        self.assertEqual(list(self.home.iterdir()), [])
+
+    def test_bad_markers_fail_before_any_skill_write(self):
+        self.rules.parent.mkdir()
+        for malformed in (installer.START + b"\nMissing end.\n", RULE_V1 + RULE_V1,
+                          installer.END + b"\n" + installer.START,
+                          b"<!-- github-reuse-first:star -->\nDamaged marker.\n",
+                          b"<!-- github-reuse-first :start -->\nDamaged marker.\n"):
+            with self.subTest(malformed=malformed):
+                self.rules.write_bytes(malformed)
+                with self.assertRaises(installer.InstallError):
+                    self.call()
+                self.assertEqual(self.rules.read_bytes(), malformed)
+                self.assertFalse(self.destination.exists())
+                self.assertFalse(list(self.home.rglob("*.bak-*")))
+
+    def test_symlink_and_source_overlap_are_rejected(self):
+        outside = self.root / "outside"
+        outside.mkdir()
+        self.rules.parent.mkdir()
+        target = outside / "rules.md"
+        target.write_bytes(b"Do not change.\n")
+        try:
+            self.rules.symlink_to(target)
+        except (OSError, NotImplementedError):
+            self.skipTest("Symlink creation is unavailable on this host.")
+        with self.assertRaises(installer.InstallError):
+            self.call()
+        self.assertEqual(target.read_bytes(), b"Do not change.\n")
+        self.assertFalse(self.destination.exists())
+        self.rules.unlink()
+        with self.assertRaises(installer.InstallError):
+            self.call(project=self.source)
+        self.assertFalse((self.source / ".agents").exists())
+
+    def test_rule_write_failure_rolls_back_skill_update(self):
+        self.call()
+        previous = (self.destination / "SKILL.md").read_bytes()
+        (self.source / "SKILL.md").write_bytes(previous + b"New content.\n")
+        self.template.write_bytes(RULE_V2)
+        original_rule = self.rules.read_bytes()
+        with patch.object(installer, "atomic_write", side_effect=OSError("simulated write failure")):
+            with self.assertRaises(OSError):
+                self.call(update=True)
+        self.assertEqual((self.destination / "SKILL.md").read_bytes(), previous)
+        self.assertEqual(self.rules.read_bytes(), original_rule)
+
+
+if __name__ == "__main__":
+    unittest.main()

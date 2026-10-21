@@ -1,0 +1,7 @@
+interface:
+  display_name: "GitHub 复用优先开发"
+  short_description: "先理解需求，有疑问即提问；复用 GitHub 实现并直接交付完整演示"
+  default_prompt: "使用 $github-reuse-first 完整理解我的需求，有疑问立即问；明确后搜索 GitHub 并复用合适实现，直接完成可运行的完整 demo，再按我的反馈优化。"
+
+policy:
+  allow_implicit_invocation: true
