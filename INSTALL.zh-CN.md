@@ -1,6 +1,9 @@
 # Codex：GitHub 复用优先开发
 
-版本：1.0.0 · 文档核验日期：2026-10-21
+版本：1.1.0 · 文档核验日期：2026-10-21
+
+**直接发仓库链接开发时，从 [AI_START.md](AI_START.md) 开始，读取 Skill 后即可执行当前任务。**
+本文件用于用户明确要求的长期安装、更新与移除；安装不作为本轮开发的前提。
 
 这套配置让 Codex 在新项目和重要功能开发前，先完整理解需求，有疑问立即提问；明确后真实查找 GitHub 中合适的实现，直接完成完整可运行 demo，并自行检查和修复。
 它适用于页面、交互、功能模块、架构、prompt 和 agent 工作流。
@@ -10,7 +13,7 @@
 成品也默认打开即可用：不额外添加登录注册、授权申请、激活码、验证码、审批、功能解锁、付费墙、次数限制或反复确认弹窗。
 必要的数据检查由程序自动完成。若外部服务暂不可用，先完成明确标注的本地模拟流程；模拟不会被描述成真实服务已接通。
 
-## 推荐用法：让 Codex 安装到当前用户
+## 长期安装：让 Codex 安装到当前用户
 
 先解压压缩包，再用你实际开发时使用的 Codex 打开本目录，把下面这段发给它：
 
@@ -44,10 +47,14 @@ python3 install.py --global
 | --- | --- |
 | 技能目录 | 当前用户的 `~/.agents/skills/github-reuse-first/` |
 | 常驻规则 | `CODEX_HOME` 下的 `AGENTS.md`；未设置时为 `~/.codex/AGENTS.md` |
-| 有效覆盖文件 | 对应目录若有非空 `AGENTS.override.md`，安装器合并到这个实际生效的文件 |
+| 全局覆盖文件 | `AGENTS.override.md` 的 UTF-8 文本按 Codex 的空白规则判为非空时，安装器合并到该文件 |
 
 这里的 `~` 指执行安装器的用户主目录；Windows 下通常在用户配置目录。
 自定义 `CODEX_HOME` 影响全局指令位置；本包仍按官方本地技能文档把用户技能放在 `~/.agents/skills/`。
+
+全局和项目指令的文件选择分别处理。全局判空使用 Unicode `White_Space`，不会先去掉 UTF-8 BOM；
+项目级则优先选择已经存在的普通 `AGENTS.override.md` 文件，包括空文件。
+这些处理依据本次核对的 Codex 官方加载源码，详见 [来源说明](SOURCES.md) 和 [审核记录](AUDIT.zh-CN.md)。
 
 ### 安装器如何保留已有配置
 
@@ -91,8 +98,8 @@ python3 install.py --project "/absolute/path/to/project"
 Windows 将 `python3` 换成 `py -3`，并提供实际项目路径。
 目标项目必须已经存在；安装器不会创建新的业务项目。
 
-这会使用项目中的 `.agents/skills/github-reuse-first/` 和 `AGENTS.md`，
-存在有效 `AGENTS.override.md` 时使用后者。安装器不会自动提交、推送项目文件。
+这会使用项目中的 `.agents/skills/github-reuse-first/`；项目根目录若已存在普通文件 `AGENTS.override.md`，
+则将入口规则写入该文件，即使它原本为空；不存在时写入 `AGENTS.md`。安装器不会自动提交、推送项目文件。
 不要同时安装多份同名技能，除非你明确需要并理解 Codex 对重复名称的发现行为。
 
 ## 没有 Python 时
@@ -101,6 +108,9 @@ Windows 将 `python3` 换成 `py -3`，并提供实际项目路径。
 
 1. 把 `skills/github-reuse-first/` 整个目录复制到当前用户的 `~/.agents/skills/`，保留目录名。
 2. 备份实际生效的全局指令文件，将 `rules/AGENTS.github-reuse.md` 中完整管理区块合并进去；保留其它内容，不要用它覆盖整个文件。
+
+若目标已有同名技能目录，先将旧目录完整备份到 `.agents/skill-backups/`，再以新目录替换；
+不要直接合并覆盖，也不要把备份副本留在 `.agents/skills/` 内。
 
 如果此前已有本包管理区块，只更新这一块。发现多个或不完整区块，先查看文件，不要猜测合并位置。
 然后重新启动 Codex 会话并确认技能可见。
@@ -123,6 +133,8 @@ Windows 同样可使用 `py -3`。项目安装时使用原来的 `--project` 范
 
 | 文件/目录 | 用途 |
 | --- | --- |
+| `README.md` / `AI_START.md` | 直接发仓库链接时的用户说明与 AI 入口 |
+| `AGENTS.md` | 本仓库工作区的任务路由与维护说明 |
 | `skills/github-reuse-first/SKILL.md` | 主开发流程与触发范围 |
 | `skills/github-reuse-first/agents/openai.yaml` | 名称、入口示例与隐式调用配置 |
 | `skills/github-reuse-first/references/` | 检索、筛选和按任务验证的细则 |
@@ -132,6 +144,7 @@ Windows 同样可使用 `py -3`。项目安装时使用原来的 `--project` 范
 | `EXAMPLES.zh-CN.md` | 常见使用请求与预期行为 |
 | `SOURCES.md` | 本次 GitHub 研究来源、采用方式与限制 |
 | `VALIDATION.md` | 实际验证结果和未覆盖范围 |
+| `AUDIT.zh-CN.md` | 已发布版本的逐文件审核、复现和修正记录 |
 | `tests/test_install.py` | 安装器的隔离测试 |
 | `source-history.bundle` | 可选的离线 Git 源码版本记录，不参与安装 |
 

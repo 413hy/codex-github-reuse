@@ -18,6 +18,13 @@ SKILL_NAME = "github-reuse-first"
 START = b"<!-- github-reuse-first:start -->"
 END = b"<!-- github-reuse-first:end -->"
 UTF8_BOM = b"\xef\xbb\xbf"
+# Rust str::trim uses Unicode White_Space. Python str.strip additionally strips
+# U+001C-U+001F, so use the same explicit character set as the Codex loader.
+UNICODE_WHITE_SPACE = (
+    "\t\n\v\f\r \u0085\u00a0\u1680"
+    "\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a"
+    "\u2028\u2029\u202f\u205f\u3000"
+)
 
 
 class InstallError(Exception):
@@ -129,11 +136,17 @@ def merge_rule(existing: bytes, template: bytes) -> bytes:
     return existing + separator + block + newline
 
 
-def active_rule_path(directory: Path) -> Path:
+def active_rule_path(directory: Path, *, scope: str) -> Path:
+    """Match Codex's distinct project and global override selection rules."""
     override = directory / "AGENTS.override.md"
     data = read_file(override)
-    if data is not None and data.removeprefix(UTF8_BOM).strip():
-        return override
+    if data is not None:
+        # Project discovery selects an existing file before reading its content.
+        if scope == "project":
+            return override
+        # Global discovery skips Unicode-whitespace-only text, but retains BOM.
+        if data.decode("utf-8", errors="replace").strip(UNICODE_WHITE_SPACE):
+            return override
     return directory / "AGENTS.md"
 
 
@@ -195,7 +208,7 @@ def install(package_dir: Path, *, project: Optional[Path] = None,
         rule_directory = absolute(Path(codex_home)) if codex_home else home / ".codex"
         scope = "global"
 
-    rule_path = active_rule_path(rule_directory)
+    rule_path = active_rule_path(rule_directory, scope=scope)
     for target in (destination, rule_path):
         reject_links(target)
         if overlaps(target, source) or overlaps(target, rule_source):
@@ -227,7 +240,7 @@ def install(package_dir: Path, *, project: Optional[Path] = None,
     # Recheck before any write if another process changed the chosen targets.
     if read_tree(destination) != old_skill or read_file(rule_path) != old_rule:
         raise InstallError("A destination changed during preflight; re-run the installer.")
-    if active_rule_path(rule_directory) != rule_path:
+    if active_rule_path(rule_directory, scope=scope) != rule_path:
         raise InstallError("The active AGENTS file changed during preflight; re-run the installer.")
 
     stage = None

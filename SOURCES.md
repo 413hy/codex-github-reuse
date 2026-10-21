@@ -21,6 +21,19 @@
 和 [LICENSE.txt](https://github.com/openai/skills/blob/main/skills/.system/skill-creator/LICENSE.txt)
 也用于核对核心流程与按需参考文件的组织方式。该子目录许可证为 Apache-2.0；未分发它的源码。
 
+### 1.1.0 审核补充：核对实际加载行为
+
+针对覆盖规则文件的选择，本次通过只读 Git 访问检查了 Codex 官方提交
+[`af91f6ef2cd66ead278ebe7d5751973eef430aee`](https://github.com/openai/codex/tree/af91f6ef2cd66ead278ebe7d5751973eef430aee)：
+
+- [全局指令加载](https://github.com/openai/codex/blob/af91f6ef2cd66ead278ebe7d5751973eef430aee/codex-rs/codex-home/src/instructions/mod.rs#L40-L78)：按文件顺序读取 UTF-8 文本，执行 Unicode 空白裁剪后采用第一个非空文件；不提前去除 BOM。
+- [项目指令发现](https://github.com/openai/codex/blob/af91f6ef2cd66ead278ebe7d5751973eef430aee/codex-rs/core/src/agents_md.rs#L242-L269)：按候选顺序选择第一个存在的普通文件，优先 `AGENTS.override.md`；发现阶段不根据内容是否为空回退。
+- [项目内容加载](https://github.com/openai/codex/blob/af91f6ef2cd66ead278ebe7d5751973eef430aee/codex-rs/core/src/agents_md.rs#L145-L180)：读取已选文件后跳过空白内容，不再尝试同目录的其它候选文件。
+- [Rust 空白字符语义](https://doc.rust-lang.org/std/primitive.char.html#method.is_whitespace)：`char::is_whitespace` 依据 Unicode `White_Space` 属性。
+
+适配落点：安装器分别处理全局与项目范围，保留原有文件内容，并增加对应回归测试。
+这是对官方加载语义的源码核对和本地对照验证；没有在包内分发上述源码，也未将其描述成用户 Codex 进程的实机测试。
+
 ## 需求整理与开发验证
 
 ### obra/superpowers
@@ -77,3 +90,13 @@
 同时保留网络不可用时如实报告、沿用既有研究、避免无意义重搜和安装时保留已有规则的具体约定。
 
 这些来源是本次构建依据。技能运行时要根据当时项目重新搜索，不把它们当成每次必须采用的名单。
+
+## 1.1.0：按用户的“直接发链接”习惯补充入口
+
+根据用户追加的实际使用方式，本轮新增 `AI_START.md` 与仓库根部 `AGENTS.md`，
+将 README 的主要入口改为“仓库链接 + 项目需求”，并同步主技能和使用示例。
+这些内容为当前使用场景编写：完整读取规则、定位用户业务项目、未安装时按正文执行、完成 demo 后继续对话迭代。
+长期安装作为可选路径保留，不增加下载确认、安装确认或开发审批步骤。
+
+这条入口是对使用方式的整理，没有引入新的上游仓库、自动安装器或平台权限修改。
+直接读取工作流与客户端安装/发现 Skill 是不同状态，文档要求如实报告。

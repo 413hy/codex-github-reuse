@@ -86,17 +86,80 @@ class InstallerTests(unittest.TestCase):
         self.assertTrue(self.destination.is_dir())
         self.assertFalse((self.home / ".codex").exists())
 
-    def test_project_scope_ignores_empty_override_and_keeps_global_untouched(self):
-        project = self.root / "项目 with spaces"
-        project.mkdir()
-        override = project / "AGENTS.override.md"
-        override.write_bytes(b"\xef\xbb\xbf \r\n")
-        result = self.call(project=project)
-        self.assertEqual(Path(result["rule_path"]), project / "AGENTS.md")
-        self.assertEqual(override.read_bytes(), b"\xef\xbb\xbf \r\n")
-        self.assertTrue((project / ".agents/skills/github-reuse-first/SKILL.md").is_file())
+    def test_project_scope_uses_existing_override_and_keeps_global_untouched(self):
+        cases = (
+            ("missing", None),
+            ("empty", b""),
+            ("ascii whitespace", b" \t\r\n"),
+            ("unicode whitespace", "\u3000\u00a0\n".encode("utf-8")),
+            ("BOM only", b"\xef\xbb\xbf"),
+            ("BOM and whitespace", b"\xef\xbb\xbf \r\n"),
+        )
+        for index, (label, previous) in enumerate(cases):
+            with self.subTest(override=label):
+                project = self.root / ("项目 with spaces " + str(index))
+                project.mkdir()
+                override = project / "AGENTS.override.md"
+                normal = project / "AGENTS.md"
+                normal.write_bytes(b"Existing project rules.\n")
+                if previous is not None:
+                    override.write_bytes(previous)
+                result = self.call(project=project)
+                expected = override if previous is not None else normal
+                self.assertEqual(Path(result["rule_path"]), expected)
+                self.assertIn(installer.START, expected.read_bytes())
+                if previous is not None:
+                    self.assertTrue(override.read_bytes().startswith(previous))
+                    self.assertEqual(normal.read_bytes(), b"Existing project rules.\n")
+                    self.assertEqual(Path(result["backups"][0]).read_bytes(), previous)
+                self.assertTrue((project / ".agents/skills/github-reuse-first/SKILL.md").is_file())
         self.assertFalse(self.rules.exists())
         self.assertFalse(self.destination.exists())
+
+    def test_global_unicode_whitespace_override_keeps_normal_rules_active(self):
+        self.rules.parent.mkdir()
+        override = self.rules.parent / "AGENTS.override.md"
+        blank = " \t\r\n\u0085\u00a0\u1680\u2000\u2007\u2028\u2029\u202f\u205f\u3000".encode("utf-8")
+        override.write_bytes(blank)
+        original = b"Existing global rules.\n"
+        self.rules.write_bytes(original)
+        result = self.call()
+        self.assertEqual(Path(result["rule_path"]), self.rules)
+        self.assertEqual(override.read_bytes(), blank)
+        self.assertTrue(self.rules.read_bytes().startswith(original))
+        self.assertIn(installer.START, self.rules.read_bytes())
+        self.assertEqual(Path(result["backups"][0]).read_bytes(), original)
+
+    def test_global_bom_only_override_receives_rules_and_preserves_bom(self):
+        self.rules.parent.mkdir()
+        override = self.rules.parent / "AGENTS.override.md"
+        override.write_bytes(b"\xef\xbb\xbf")
+        original = b"Existing global rules.\n"
+        self.rules.write_bytes(original)
+        result = self.call()
+        self.assertEqual(Path(result["rule_path"]), override)
+        self.assertTrue(override.read_bytes().startswith(b"\xef\xbb\xbf"))
+        self.assertIn(installer.START, override.read_bytes())
+        self.assertEqual(self.rules.read_bytes(), original)
+        self.assertEqual(Path(result["backups"][0]).read_bytes(), b"\xef\xbb\xbf")
+        repeat = self.call()
+        self.assertFalse(repeat["skill_changed"])
+        self.assertFalse(repeat["rule_changed"])
+
+    def test_global_c0_separators_are_content_under_rust_whitespace_rules(self):
+        for codepoint in range(0x1c, 0x20):
+            with self.subTest(codepoint=codepoint):
+                profile = self.root / ("C0 profile " + str(codepoint))
+                profile.mkdir()
+                os.environ["CODEX_HOME"] = str(profile)
+                override = profile / "AGENTS.override.md"
+                override.write_bytes(bytes([codepoint]))
+                normal = profile / "AGENTS.md"
+                normal.write_bytes(b"Existing global rules.\n")
+                result = self.call()
+                self.assertEqual(Path(result["rule_path"]), override)
+                self.assertIn(installer.START, override.read_bytes())
+                self.assertEqual(normal.read_bytes(), b"Existing global rules.\n")
 
     def test_changed_skill_is_backed_up_and_updated_by_default(self):
         self.call()
